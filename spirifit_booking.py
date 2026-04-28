@@ -3,10 +3,11 @@ import sqlite3
 import pandas as pd
 from datetime import datetime, time, timedelta
 
-# --- 資料庫設定 (SQLite) ---
+# --- 資料庫設定 ---
 def init_db():
     conn = sqlite3.connect('spirifit_bookings.db')
     c = conn.cursor()
+    # 增加 status 欄位邏輯
     c.execute('''
         CREATE TABLE IF NOT EXISTS appointments (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -15,24 +16,12 @@ def init_db():
             coach TEXT,
             booking_date TEXT,
             booking_time TEXT,
-            status TEXT DEFAULT '已確認',
+            status TEXT DEFAULT '待確認',
             created_at TEXT
         )
     ''')
     conn.commit()
     conn.close()
-
-# 檢查該時段是否已被預約
-def is_slot_available(coach, date, time):
-    conn = sqlite3.connect('spirifit_bookings.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT * FROM appointments 
-        WHERE coach = ? AND booking_date = ? AND booking_time = ?
-    ''', (coach, str(date), str(time)))
-    result = c.fetchone()
-    conn.close()
-    return result is None
 
 def add_booking(name, phone, coach, date, time):
     conn = sqlite3.connect('spirifit_bookings.db')
@@ -45,31 +34,49 @@ def add_booking(name, phone, coach, date, time):
     conn.commit()
     conn.close()
 
+# 更新預約狀態的功能
+def update_status(appointment_id, new_status):
+    conn = sqlite3.connect('spirifit_bookings.db')
+    c = conn.cursor()
+    c.execute('UPDATE appointments SET status = ? WHERE id = ?', (new_status, appointment_id))
+    conn.commit()
+    conn.close()
+
 def get_bookings():
     conn = sqlite3.connect('spirifit_bookings.db')
     df = pd.read_sql_query("SELECT * FROM appointments", conn)
     conn.close()
     return df
 
+def is_slot_available(coach, date, time):
+    conn = sqlite3.connect('spirifit_bookings.db')
+    c = conn.cursor()
+    # 只要不是「已取消」的預約，都視為佔用時段
+    c.execute('''
+        SELECT * FROM appointments 
+        WHERE coach = ? AND booking_date = ? AND booking_time = ? AND status != '已取消'
+    ''', (coach, str(date), str(time)))
+    result = c.fetchone()
+    conn.close()
+    return result is None
+
 # --- 頁面設定 ---
-st.set_page_config(page_title="樂勁SpiriFit預約系統", page_icon="🏋️‍♂️", layout="centered")
+st.set_page_config(page_title="樂勁SpiriFit預約管理系統", page_icon="🏋️‍♂️", layout="wide")
 
 init_db()
 
-tab1, tab2 = st.tabs(["💪 學員預約介面", "⚙️ 工作室後台管理"])
+tab1, tab2 = st.tabs(["💪 學員預約介面", "⚙️ 工作室管理後台"])
 
 # ==========================================
 # Tab 1: 學員預約介面
 # ==========================================
 with tab1:
     st.title("🏋️‍♂️ 樂勁SpiriFit運動工作室")
-    st.write("歡迎預約教練課程！每堂課 1 小時。")
+    st.info("💡 提醒：提交預約後，需等待教練確認才算預約成功喔！")
 
-    with st.form("booking_form", clear_on_submit=False): # 改為 False 方便預約失敗時保留資料
+    with st.form("booking_form"):
         st.subheader("1. 選擇教練與時段")
-        
         coach = st.selectbox("指定教練", ["Lily 教練", "Nick 教練", "Aaron 教練"])
-        
         col1, col2 = st.columns(2)
         with col1:
             date = st.date_input("選擇日期", min_value=datetime.today() + timedelta(days=1))
@@ -81,51 +88,30 @@ with tab1:
         name = st.text_input("學員姓名 *")
         phone = st.text_input("聯絡電話 *")
         
-        submitted = st.form_submit_button("確認預約", type="primary", use_container_width=True)
+        submitted = st.form_submit_button("提交預約申請", type="primary", use_container_width=True)
         
         if submitted:
             if not name or not phone:
-                st.error("⚠️ 請務必填寫姓名與聯絡電話！")
+                st.error("⚠️ 請填寫姓名與電話。")
             else:
-                # 執行檢查邏輯
                 if is_slot_available(coach, date, booking_time):
                     add_booking(name, phone, coach, date, booking_time)
-                    st.success(f"🎉 預約成功！\n\n**教練：** {coach}\n**時間：** {date} {booking_time.strftime('%H:%M')}")
-                    st.balloons()
+                    st.success(f"📩 申請已送出！教練確認後會再通知您。\n\n時段：{date} {booking_time.strftime('%H:%M')}")
                 else:
-                    st.error(f"❌ 預約失敗：{coach} 在 {date} {booking_time.strftime('%H:%M')} 已經有預約了，請選擇其他時段或教練。")
+                    st.error("❌ 該時段已有預約或審核中，請更換時段。")
 
 # ==========================================
-# Tab 2: 後台管理系統
+# Tab 2: 工作室管理後台
 # ==========================================
 with tab2:
-    st.title("系統管理後台")
+    st.title("管理員登入")
+    password = st.text_input("輸入管理密碼", type="password")
     
-    # --- 密碼鎖設定 ---
-    password = st.text_input("請輸入管理員密碼", type="password")
-    
-    # 這裡可以修改你的密碼
     if password == "spirifit888":
-        st.success("密碼正確，歡迎回來！")
-        
+        st.divider()
         df = get_bookings()
+        
         if not df.empty:
-            df = df.sort_values(by=['booking_date', 'booking_time'], ascending=[True, True])
-            st.dataframe(
-                df[['id', 'client_name', 'phone', 'coach', 'booking_date', 'booking_time', 'status']],
-                use_container_width=True, hide_index=True
-            )
-            
-            st.markdown("### 📊 營運統計")
-            col1, col2, col3, col4 = st.columns(4)
-            coach_counts = df['coach'].value_counts()
-            col1.metric("總預約", len(df))
-            col2.metric("Lily", coach_counts.get("Lily 教練", 0))
-            col3.metric("Nick", coach_counts.get("Nick 教練", 0))
-            col4.metric("Aaron", coach_counts.get("Aaron 教練", 0))
-        else:
-            st.info("目前尚無預約紀錄。")
-    elif password == "":
-        st.info("請輸入密碼以查看預約清單。")
-    else:
-        st.error("密碼錯誤，請重新輸入。")
+            # 統計面版 (僅計算已確認)
+            confirmed_df = df[df['status'] == '已確認']
+            st.subheader("📊 營運快報 (僅計
